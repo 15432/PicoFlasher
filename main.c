@@ -122,7 +122,6 @@ struct cmd
 };
 #pragma pack(pop)
 
-bool emmc_detected = false;
 bool stream_emmc = false;
 bool do_stream = false;
 uint32_t stream_offset = 0;
@@ -158,8 +157,8 @@ void stream()
 		}
 		else
 		{
-			/*static uint8_t buffer[4 + 0x200];
-			int ret = sd_readblocks_sync(&buffer[4], stream_offset, 1);
+			static uint8_t buffer[4 + 0x200];
+			uint32_t ret = xbox_emmc_read_block(stream_offset, &buffer[4]);
 			*(uint32_t *)buffer = ret;
 			if (ret == 0)
 			{
@@ -170,7 +169,7 @@ void stream()
 			{
 				tud_cdc_write(&ret, 4);
 				do_stream = false;
-			}*/
+			}
 		}
 	}
 }
@@ -295,48 +294,39 @@ void tud_cdc_rx_cb(uint8_t itf)
 		{
 			reset_usb_boot(0, 0);
 		}
-		/*else if (cmd.cmd == EMMC_DETECT)
+		else if (cmd.cmd == EMMC_DETECT)
 		{
-			if (!emmc_detected)
-			{
-				gpio_init(MMC_CLK_PIN);
-				gpio_set_dir(MMC_CLK_PIN, GPIO_IN);
-				emmc_detected = gpio_get(MMC_CLK_PIN);
-			}
-			tud_cdc_write(&emmc_detected, 1);
+			uint32_t fc = xbox_get_flash_config();
+			int emmc_detect_result = (fc & 0xF0000000) == 0xC0000000;
+			tud_cdc_write(&emmc_detect_result, 1);
 		}
 		else if (cmd.cmd == EMMC_INIT)
 		{
-			// Put SMC into reset
-			gpio_init(SMC_RST_XDK_N);
-			gpio_set_dir(SMC_RST_XDK_N, GPIO_OUT);
-			gpio_put(SMC_RST_XDK_N, 0);
-
-			uint32_t ret = sd_init();
+			uint32_t ret = xbox_emmc_init();
 			tud_cdc_write(&ret, 4);
 		}
 		else if (cmd.cmd == EMMC_GET_CID)
 		{
-			uint8_t cid_raw[16];
-			sd_read_cid(cid_raw);
+			uint8_t cid_raw[16] = {0};
+			xbox_emmc_read_cid(cid_raw);
 			tud_cdc_write(cid_raw, sizeof(cid_raw));
 		}
 		else if (cmd.cmd == EMMC_GET_CSD)
 		{
-			uint8_t csd_raw[16];
-			sd_read_csd(csd_raw);
+			uint8_t csd_raw[16] = {0};
+			xbox_emmc_read_csd(csd_raw);
 			tud_cdc_write(csd_raw, sizeof(csd_raw));
 		}
 		else if (cmd.cmd == EMMC_GET_EXT_CSD)
 		{
 			uint8_t ext_csd[512];
-			sd_read_ext_csd(ext_csd);
+			xbox_emmc_read_ext_csd(ext_csd);
 			tud_cdc_write(ext_csd, sizeof(ext_csd));
 		}
 		else if (cmd.cmd == EMMC_READ)
 		{
 			uint8_t buffer[0x200];
-			int ret = sd_readblocks_sync(buffer, cmd.lba, 1);
+			int ret = xbox_emmc_read_block(cmd.lba, buffer);
 			tud_cdc_write(&ret, 4);
 			if (ret == 0)
 				tud_cdc_write(buffer, sizeof(buffer));
@@ -354,9 +344,9 @@ void tud_cdc_rx_cb(uint8_t itf)
 			uint32_t count = tud_cdc_read(&buffer, sizeof(buffer));
 			if (count != sizeof(buffer))
 				return;
-			uint32_t ret = sd_writeblocks_sync(buffer, cmd.lba, 1);
+			uint32_t ret = xbox_emmc_write_block(cmd.lba, buffer);
 			tud_cdc_write(&ret, 4);
-		}*/
+		}
 
 		tud_cdc_write_flush();
 	}

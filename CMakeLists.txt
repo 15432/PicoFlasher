@@ -12,6 +12,9 @@ set(CMAKE_CXX_STANDARD 17)
 # Creates a pico-sdk subdirectory in our project for the libraries
 pico_sdk_init()
 
+pico_define_boot_stage2(boot2 ${PICO_DEFAULT_BOOT_STAGE2_FILE})
+target_compile_definitions(boot2 PRIVATE PICO_FLASH_SPI_CLKDIV=4)
+
 # Tell CMake where to find the executable source file
 add_executable(${PROJECT_NAME} 
     main.c
@@ -21,7 +24,6 @@ add_executable(${PROJECT_NAME}
 	pio_spi.c
 	nuvoton_spi.c
 	isd1200.c
-	sdio.c
 )
 
 # Create map/bin/hex/uf2 files
@@ -31,18 +33,18 @@ target_include_directories(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR})
 
 pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/spi.pio)
-    
-pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/sdio.pio)
 
 # Link to pico_stdlib (gpio, time, etc. functions)
 target_link_libraries(${PROJECT_NAME} 
     pico_stdlib
 	tinyusb_device_unmarked
+	tinyusb_board
 	hardware_pio
 	hardware_spi
-	hardware_dma
 )
 
 # Enable usb output, disable uart output
 pico_enable_stdio_usb(${PROJECT_NAME} 0)
-pico_enable_stdio_uart(${PROJECT_NAME} 1)
+pico_enable_stdio_uart(${PROJECT_NAME} 0)
+
+pico_set_boot_stage2(${PROJECT_NAME} boot2)

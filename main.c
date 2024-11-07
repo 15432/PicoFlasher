@@ -27,9 +27,7 @@
 #include "tusb.h"
 #include "xbox.h"
 #include "isd1200.h"
-#include "sdio.h"
 #include "pins.h"
-#include "mmc_defs.h"
 
 #define LED_PIN 25
 
@@ -160,7 +158,7 @@ void stream()
 		}
 		else
 		{
-			static uint8_t buffer[4 + 0x200];
+			/*static uint8_t buffer[4 + 0x200];
 			int ret = sd_readblocks_sync(&buffer[4], stream_offset, 1);
 			*(uint32_t *)buffer = ret;
 			if (ret == 0)
@@ -172,7 +170,7 @@ void stream()
 			{
 				tud_cdc_write(&ret, 4);
 				do_stream = false;
-			}
+			}*/
 		}
 	}
 }
@@ -297,7 +295,7 @@ void tud_cdc_rx_cb(uint8_t itf)
 		{
 			reset_usb_boot(0, 0);
 		}
-		else if (cmd.cmd == EMMC_DETECT)
+		/*else if (cmd.cmd == EMMC_DETECT)
 		{
 			if (!emmc_detected)
 			{
@@ -358,7 +356,7 @@ void tud_cdc_rx_cb(uint8_t itf)
 				return;
 			uint32_t ret = sd_writeblocks_sync(buffer, cmd.lba, 1);
 			tud_cdc_write(&ret, 4);
-		}
+		}*/
 
 		tud_cdc_write_flush();
 	}

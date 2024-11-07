@@ -65,7 +65,7 @@ public entry_point:                 ; Must set X,Y to n-2 before starting!
 
 .wrap_target
 byteloop:
-	wait 1 GPIO 11     side 0x0     ; hack for nuvoton RDY/BSYB
+	wait 1 GPIO 15     side 0x0     ; hack for nuvoton RDY/BSYB
 bitloop:
     out pins, 1        side 0x2 [1]
     in pins, 1         side 0x0

@@ -109,7 +109,11 @@ int xbox_nand_read_block(uint32_t lba, uint8_t *buffer, uint8_t *spare)
 	spiex_write_reg(0x08, 0x03);
 
 	if (xbox_nand_wait_ready(0x1000))
-		return 0x8000 | xbox_nand_get_status();
+	{
+		uint16_t status = xbox_nand_get_status();
+		if (status && !(status & 0x5C)) /* do not stop at bad block / ecc error */
+			return 0x8000 | status;
+	}
 
 	spiex_write_reg(0x0C, 0);
 

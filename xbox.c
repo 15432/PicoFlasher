@@ -72,9 +72,12 @@ void xbox_stop_smc()
 
 uint32_t xbox_get_flash_config()
 {
-	static uint32_t flash_config = 0;
-	if (!flash_config)
-		flash_config = spiex_read_reg(0);
+	uint32_t flash_config = spiex_read_reg(0);
+
+	if ((flash_config & 0xF0000000) == 0xC0000000)
+	{
+		flash_config = 0xC0462002;
+	}
 
 	return flash_config;
 }

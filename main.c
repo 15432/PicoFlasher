@@ -52,7 +52,7 @@ uint32_t core1_get_config(void);
 // Invoked when device is mounted
 void tud_mount_cb(void)
 {
-	core1_stop_smc();
+	//core1_stop_smc();
 }
 
 // Invoked when device is unmounted
@@ -74,7 +74,7 @@ void tud_suspend_cb(bool remote_wakeup_en)
 // Invoked when usb bus is resumed
 void tud_resume_cb(void)
 {
-	core1_stop_smc();
+	//core1_stop_smc();
 }
 
 typedef struct
@@ -232,11 +232,11 @@ void tud_cdc_rx_cb(uint8_t itf)
 		}
 		else if (cmd.cmd == START_SMC)
 		{
-			xbox_start_smc();
+			core1_start_smc();
 		}
 		else if (cmd.cmd == STOP_SMC)
 		{
-			xbox_stop_smc();
+			core1_stop_smc();
 		}
 		else if (cmd.cmd == GET_FLASH_CONFIG)
 		{

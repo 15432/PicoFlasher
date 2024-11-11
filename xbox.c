@@ -23,6 +23,8 @@
 bool is_selected = false;
 bool is_block_set = false;
 
+bool is_smc_running = true;
+
 void xbox_init()
 {
 	gpio_init(SMC_DBG_EN);
@@ -40,6 +42,11 @@ void xbox_init()
 
 void xbox_start_smc()
 {
+	if (is_smc_running)
+	{
+		return;
+	}
+
 	spiex_deinit();
 
 	gpio_put(SMC_DBG_EN, 0);
@@ -48,10 +55,15 @@ void xbox_start_smc()
 	sleep_ms(50);
 
 	gpio_put(SMC_RST_XDK_N, 1);
+	is_smc_running = true;
 }
 
 void xbox_stop_smc()
 {
+	if (!is_smc_running)
+	{
+		return;
+	}
 	gpio_put(SMC_DBG_EN, 0);
 
 	sleep_ms(50);
@@ -74,6 +86,7 @@ void xbox_stop_smc()
 
 	is_selected = false;
 	is_block_set = false;
+	is_smc_running = false;
 }
 
 uint32_t xbox_get_flash_config()

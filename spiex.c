@@ -53,6 +53,8 @@ void spiex_write_reg(uint8_t reg, uint32_t val)
 #endif
 #include "hardware/spi.h"
 
+extern void xbox_stop_smc();
+
 void spiex_init()
 {
 	spi_init(spi0, 28 * 1000 * 1000);
@@ -95,6 +97,7 @@ static uint8_t lsb2msb[] =
 
 uint32_t spiex_read_reg(uint8_t reg)
 {
+	xbox_stop_smc();
 	uint8_t txbuf[] = {(reg << 2) | 1, 0xFF, 0x00, 0x00, 0x00, 0x00};
 	uint8_t rxbuf[sizeof(txbuf)];
 
@@ -115,7 +118,7 @@ uint32_t spiex_read_reg(uint8_t reg)
 
 void spiex_write_reg(uint8_t reg, uint32_t val)
 {
-
+	xbox_stop_smc();
 	uint8_t txbuf[] = {(reg << 2) | 2, 0x00, 0x00, 0x00, 0x00};
 
 	*(uint32_t *)&txbuf[1] = val;

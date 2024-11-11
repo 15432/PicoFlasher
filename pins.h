@@ -30,4 +30,7 @@
 #define NUVOTON_SPI_CLK 28 // FT2T4
 #define NUVOTON_SPI_MOSI 29 // FT2T5
 
+#define SMC_CPU_RST 6
+#define SMC_POST_0 7
+
 #endif

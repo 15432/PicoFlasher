@@ -31,6 +31,8 @@
 #include "isd1200.h"
 #include "pins.h"
 
+#include "post.pio.h"
+
 #define QUEUE_CMD_READ_NAND 0
 #define QUEUE_CMD_WRITE_NAND 1
 #define QUEUE_CMD_READ_EMMC 2
@@ -92,6 +94,8 @@ queue_t usb_queue;
 #define WRITE_FLASH 0x03
 #define READ_FLASH_STREAM 0x04
 
+#define GET_POST 0x80
+
 #define EMMC_DETECT 0x50
 #define EMMC_INIT 0x51
 #define EMMC_GET_CID 0x52
@@ -100,6 +104,9 @@ queue_t usb_queue;
 #define EMMC_READ 0x55
 #define EMMC_READ_STREAM 0x56
 #define EMMC_WRITE 0x57
+
+#define START_SMC 0xC0
+#define STOP_SMC 0xC1
 
 #define ISD1200_INIT 0xA0
 #define ISD1200_DEINIT 0xA1
@@ -167,6 +174,32 @@ void stream()
 	}
 }
 
+unsigned char reverse(unsigned char b) 
+{
+   b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+   b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+   b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+   return b;
+}
+
+static uint8_t post_put;
+static uint8_t post_get;
+static uint8_t post_buf[0x100] = {0};
+
+void post_buffer()
+{
+	for (int i = 0; i <= 8; i++)
+	{
+		if (pio_sm_is_rx_fifo_empty(pio0, 0))
+			continue;
+		uint32_t data = pio_sm_get(pio0, 0);
+		uint8_t post = reverse(data & 0xFF);
+		post_buf[post_put++] = post;
+		if (post_get == post_put)
+			post_get++;
+	}
+}
+
 // Invoked when CDC interface received data from host
 void tud_cdc_rx_cb(uint8_t itf)
 {
@@ -196,6 +229,14 @@ void tud_cdc_rx_cb(uint8_t itf)
 		{
 			uint32_t ver = 3;
 			tud_cdc_write(&ver, 4);
+		}
+		else if (cmd.cmd == START_SMC)
+		{
+			xbox_start_smc();
+		}
+		else if (cmd.cmd == STOP_SMC)
+		{
+			xbox_stop_smc();
 		}
 		else if (cmd.cmd == GET_FLASH_CONFIG)
 		{
@@ -230,6 +271,23 @@ void tud_cdc_rx_cb(uint8_t itf)
 			stream_offset_sent = 0;
 			stream_offset_rcvd = 0;
 			stream_end = cmd.lba;
+		}
+		else if (cmd.cmd == GET_POST)
+		{
+			uint8_t len = post_put - post_get;
+			tud_cdc_write(&len, 1);
+			if (len != 0)
+			{
+				if (post_get < post_put)
+				{
+					tud_cdc_write(post_buf + post_get, post_put - post_get);
+				} else
+				{
+					tud_cdc_write(post_buf + post_get, sizeof(post_buf) - post_get);
+					tud_cdc_write(post_buf, post_put);
+				}
+				post_get = post_put = 0;
+			}
 		}
 		if (cmd.cmd == ISD1200_INIT)
 		{
@@ -446,6 +504,23 @@ void main_core1(void)
 	}
 }
 
+int post_init()
+{
+	int offset = pio_add_program(pio0, &poster_program);
+
+    pio_sm_config c = poster_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, SMC_POST_0);
+	sm_config_set_jmp_pin(&c, SMC_CPU_RST);
+	for(int i = SMC_POST_0; i < SMC_POST_0 + 8; i++)
+	{
+		gpio_pull_up(i);
+	}
+    sm_config_set_in_shift(&c, false, false, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+    pio_sm_init(pio0, 0, offset, &c);
+    pio_sm_set_enabled(pio0, 0, true);
+}
+
 int main(void)
 {
 	vreg_set_voltage(VREG_VOLTAGE_1_30);
@@ -456,6 +531,7 @@ int main(void)
 
 	xbox_init();
 	tusb_init();
+	post_init();
 
 	queue_init(&xbox_queue, sizeof(queue_entry_t), 8);
     queue_init(&usb_queue, sizeof(queue_entry_t), 8);
@@ -464,6 +540,7 @@ int main(void)
 
 	while (1)
 	{
+		post_buffer();
 		tud_task();
 		stream();
 	}

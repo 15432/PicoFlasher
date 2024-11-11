@@ -1,0 +1,20 @@
+.program poster
+
+.wrap_target
+    mov    osr, ::pins
+    jmp    pin, skip_ff
+    mov    osr, !null    
+skip_ff:
+    out    null, 24
+    mov    x, osr
+    jmp    x != y, save_to_y
+    mov    y, isr
+    jmp    x != y, save_to_isr
+    .wrap
+save_to_isr:
+    mov    isr, x
+    push   block
+    mov    isr, x
+save_to_y:
+    mov    y, x
+    jmp    0

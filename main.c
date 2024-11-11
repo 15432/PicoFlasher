@@ -29,8 +29,6 @@
 #include "isd1200.h"
 #include "pins.h"
 
-#define LED_PIN 25
-
 // Invoked when device is mounted
 void tud_mount_cb(void)
 {
@@ -61,22 +59,6 @@ void tud_resume_cb(void)
 	xbox_stop_smc();
 
 	uint32_t flash_config = xbox_get_flash_config();
-}
-
-void led_blink(void)
-{
-	static uint32_t start_ms = 0;
-	static bool led_state = false;
-
-	uint32_t now = board_millis();
-
-	if (now - start_ms < 50)
-		return;
-
-	start_ms = now;
-
-	gpio_put(LED_PIN, led_state);
-	led_state = 1 - led_state;
 }
 
 #define GET_VERSION 0x00
@@ -170,7 +152,6 @@ void stream()
 void tud_cdc_rx_cb(uint8_t itf)
 {
 	(void)itf;
-	led_blink();
 
 	uint32_t avilable_data = tud_cdc_available();
 
@@ -347,21 +328,15 @@ void tud_cdc_rx_cb(uint8_t itf)
 void tud_cdc_tx_complete_cb(uint8_t itf)
 {
 	(void)itf;
-	led_blink();
 }
 
 int main(void)
 {
 	vreg_set_voltage(VREG_VOLTAGE_1_30);
-	set_sys_clock_khz(266000, true);
+	set_sys_clock_khz(200000, true);
 
 	uint32_t freq = clock_get_hz(clk_sys);
 	clock_configure(clk_peri, 0, CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLK_SYS, freq, freq);
-
-	stdio_init_all();
-
-	gpio_init(LED_PIN);
-	gpio_set_dir(LED_PIN, GPIO_OUT);
 
 	xbox_init();
 

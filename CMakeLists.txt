@@ -41,6 +41,7 @@ target_link_libraries(${PROJECT_NAME}
 	tinyusb_board
 	hardware_pio
 	hardware_spi
+	pico_multicore
 )
 
 # Enable usb output, disable uart output

@@ -23,24 +23,40 @@
 #include "hardware/clocks.h"
 #include "pico/stdlib.h"
 #include "pico/bootrom.h"
+#include "pico/util/queue.h"
+#include "pico/multicore.h"
 
 #include "tusb.h"
 #include "xbox.h"
 #include "isd1200.h"
 #include "pins.h"
 
+#define QUEUE_CMD_READ_NAND 0
+#define QUEUE_CMD_WRITE_NAND 1
+#define QUEUE_CMD_READ_EMMC 2
+#define QUEUE_CMD_WRITE_EMMC 3
+#define QUEUE_CMD_GET_CONFIG 4
+#define QUEUE_CMD_READ_CID 5
+#define QUEUE_CMD_READ_CSD 6
+#define QUEUE_CMD_READ_EXT_CSD 7
+#define QUEUE_CMD_INIT_EMMC 8
+#define QUEUE_CMD_START_SMC 9
+#define QUEUE_CMD_STOP_SMC 10
+
+void core1_stop_smc(void);
+void core1_start_smc(void);
+uint32_t core1_get_config(void);
+
 // Invoked when device is mounted
 void tud_mount_cb(void)
 {
-	xbox_stop_smc();
-
-	uint32_t flash_config = xbox_get_flash_config();
+	core1_stop_smc();
 }
 
 // Invoked when device is unmounted
 void tud_umount_cb(void)
 {
-	xbox_start_smc();
+	core1_start_smc();
 }
 
 // Invoked when usb bus is suspended
@@ -50,16 +66,25 @@ void tud_suspend_cb(bool remote_wakeup_en)
 {
 	(void)remote_wakeup_en;
 
-	xbox_start_smc();
+	core1_start_smc();
 }
 
 // Invoked when usb bus is resumed
 void tud_resume_cb(void)
 {
-	xbox_stop_smc();
-
-	uint32_t flash_config = xbox_get_flash_config();
+	core1_stop_smc();
 }
+
+typedef struct
+{
+	uint32_t cmd;
+	uint32_t status;
+    uint32_t offset;
+	uint8_t data[0x210];
+} queue_entry_t;
+
+queue_t xbox_queue;
+queue_t usb_queue;
 
 #define GET_VERSION 0x00
 #define GET_FLASH_CONFIG 0x01
@@ -98,13 +123,14 @@ struct cmd
 
 bool stream_emmc = false;
 bool do_stream = false;
-uint32_t stream_offset = 0;
+uint32_t stream_offset_rcvd = 0;
+uint32_t stream_offset_sent = 0;
 uint32_t stream_end = 0;
 void stream()
 {
 	if (do_stream)
 	{
-		if (stream_offset >= stream_end)
+		if (stream_offset_rcvd >= stream_end)
 		{
 			do_stream = false;
 			return;
@@ -113,36 +139,29 @@ void stream()
 		if (tud_cdc_write_available() < 4 + (stream_emmc ? 0x200 : 0x210))
 			return;
 
-		if (!stream_emmc)
+		if (do_stream && !queue_is_full(&xbox_queue) && stream_offset_sent < stream_end)
 		{
-			static uint8_t buffer[4 + 0x210];
-			uint32_t ret = xbox_nand_read_block(stream_offset, &buffer[4], &buffer[4 + 0x200]);
-			*(uint32_t *)buffer = ret;
-			if (ret == 0)
-			{
-				tud_cdc_write(buffer, sizeof(buffer));
-				++stream_offset;
-			}
-			else
-			{
-				tud_cdc_write(&ret, 4);
-				do_stream = false;
-			}
+			queue_entry_t entry;
+			entry.offset = stream_offset_sent++;
+			entry.cmd = stream_emmc ? QUEUE_CMD_READ_EMMC : QUEUE_CMD_READ_NAND;
+			queue_add_blocking(&xbox_queue, &entry);
 		}
-		else
+		if (do_stream && !queue_is_empty(&usb_queue))
 		{
-			static uint8_t buffer[4 + 0x200];
-			uint32_t ret = xbox_emmc_read_block(stream_offset, &buffer[4]);
-			*(uint32_t *)buffer = ret;
-			if (ret == 0)
+			queue_entry_t entry;
+			queue_remove_blocking(&usb_queue, &entry);
+			++stream_offset_rcvd;
+			tud_cdc_write(&entry.status, 4);
+			if (entry.status == 0)
 			{
-				tud_cdc_write(buffer, sizeof(buffer));
-				++stream_offset;
-			}
-			else
+				tud_cdc_write(entry.data, stream_emmc ? 0x200 : 0x210);
+			} else
 			{
-				tud_cdc_write(&ret, 4);
 				do_stream = false;
+				while (stream_offset_rcvd < stream_offset_sent)
+				{
+					queue_remove_blocking(&usb_queue, &entry);
+				}
 			}
 		}
 	}
@@ -180,31 +199,36 @@ void tud_cdc_rx_cb(uint8_t itf)
 		}
 		else if (cmd.cmd == GET_FLASH_CONFIG)
 		{
-			uint32_t fc = xbox_get_flash_config();
+			uint32_t fc = core1_get_config();
 			tud_cdc_write(&fc, 4);
 		}
 		else if (cmd.cmd == READ_FLASH)
 		{
-			uint8_t buffer[0x210];
-			uint32_t ret = xbox_nand_read_block(cmd.lba, buffer, &buffer[0x200]);
-			tud_cdc_write(&ret, 4);
-			if (ret == 0)
-				tud_cdc_write(buffer, sizeof(buffer));
+			queue_entry_t entry;
+			entry.offset = cmd.lba;
+			entry.cmd = QUEUE_CMD_READ_NAND;
+			queue_add_blocking(&xbox_queue, &entry);
+			queue_remove_blocking(&usb_queue, &entry);
+			tud_cdc_write(&entry.status, 4);
+			if (entry.status == 0)
+				tud_cdc_write(entry.data, 0x210);
 		}
 		else if (cmd.cmd == WRITE_FLASH)
 		{
-			uint8_t buffer[0x210];
-			uint32_t count = tud_cdc_read(&buffer, sizeof(buffer));
-			if (count != sizeof(buffer))
-				return;
-			uint32_t ret = xbox_nand_write_block(cmd.lba, buffer, &buffer[0x200]);
+			queue_entry_t entry;
+			entry.offset = cmd.lba;
+			tud_cdc_read(entry.data, 0x210);
+			entry.cmd = QUEUE_CMD_WRITE_NAND;
+			queue_add_blocking(&xbox_queue, &entry);
+			uint32_t ret = 0;	// TODO: add errors processing
 			tud_cdc_write(&ret, 4);
 		}
 		else if (cmd.cmd == READ_FLASH_STREAM)
 		{
 			stream_emmc = false;
 			do_stream = true;
-			stream_offset = 0;
+			stream_offset_sent = 0;
+			stream_offset_rcvd = 0;
 			stream_end = cmd.lba;
 		}
 		if (cmd.cmd == ISD1200_INIT)
@@ -269,55 +293,69 @@ void tud_cdc_rx_cb(uint8_t itf)
 		}
 		else if (cmd.cmd == EMMC_DETECT)
 		{
-			uint32_t fc = xbox_get_flash_config();
+			uint32_t fc = core1_get_config();
 			int emmc_detect_result = (fc & 0xF0000000) == 0xC0000000;
 			tud_cdc_write(&emmc_detect_result, 1);
 		}
 		else if (cmd.cmd == EMMC_INIT)
 		{
-			uint32_t ret = xbox_emmc_init();
-			tud_cdc_write(&ret, 4);
+			queue_entry_t entry;
+			entry.cmd = QUEUE_CMD_INIT_EMMC;
+			queue_add_blocking(&xbox_queue, &entry);
+			queue_remove_blocking(&usb_queue, &entry);
+			tud_cdc_write(&entry.status, 4);
 		}
 		else if (cmd.cmd == EMMC_GET_CID)
 		{
-			uint8_t cid_raw[16] = {0};
-			xbox_emmc_read_cid(cid_raw);
-			tud_cdc_write(cid_raw, sizeof(cid_raw));
+			queue_entry_t entry;
+			entry.cmd = QUEUE_CMD_READ_CID;
+			queue_add_blocking(&xbox_queue, &entry);
+			queue_remove_blocking(&usb_queue, &entry);
+			tud_cdc_write(entry.data, 16);
 		}
 		else if (cmd.cmd == EMMC_GET_CSD)
 		{
-			uint8_t csd_raw[16] = {0};
-			xbox_emmc_read_csd(csd_raw);
-			tud_cdc_write(csd_raw, sizeof(csd_raw));
+			queue_entry_t entry;
+			entry.cmd = QUEUE_CMD_READ_CSD;
+			queue_add_blocking(&xbox_queue, &entry);
+			queue_remove_blocking(&usb_queue, &entry);
+			tud_cdc_write(entry.data, 16);
 		}
 		else if (cmd.cmd == EMMC_GET_EXT_CSD)
 		{
-			uint8_t ext_csd[512];
-			xbox_emmc_read_ext_csd(ext_csd);
-			tud_cdc_write(ext_csd, sizeof(ext_csd));
+			queue_entry_t entry;
+			entry.cmd = QUEUE_CMD_READ_EXT_CSD;
+			queue_add_blocking(&xbox_queue, &entry);
+			queue_remove_blocking(&usb_queue, &entry);
+			tud_cdc_write(entry.data, 0x200);
 		}
 		else if (cmd.cmd == EMMC_READ)
 		{
-			uint8_t buffer[0x200];
-			int ret = xbox_emmc_read_block(cmd.lba, buffer);
-			tud_cdc_write(&ret, 4);
-			if (ret == 0)
-				tud_cdc_write(buffer, sizeof(buffer));
+			queue_entry_t entry;
+			entry.offset = cmd.lba;
+			entry.cmd = QUEUE_CMD_READ_EMMC;
+			queue_add_blocking(&xbox_queue, &entry);
+			queue_remove_blocking(&usb_queue, &entry);
+			tud_cdc_write(&entry.status, 4);
+			if (entry.status == 0)
+				tud_cdc_write(entry.data, 0x200);
 		}
 		else if (cmd.cmd == EMMC_READ_STREAM)
 		{
 			stream_emmc = true;
 			do_stream = true;
-			stream_offset = 0;
+			stream_offset_sent = 0;
+			stream_offset_rcvd = 0;
 			stream_end = cmd.lba;
 		}
 		else if (cmd.cmd == EMMC_WRITE)
 		{
-			uint8_t buffer[0x200];
-			uint32_t count = tud_cdc_read(&buffer, sizeof(buffer));
-			if (count != sizeof(buffer))
-				return;
-			uint32_t ret = xbox_emmc_write_block(cmd.lba, buffer);
+			queue_entry_t entry;
+			entry.offset = cmd.lba;
+			tud_cdc_read(entry.data, 0x200);
+			entry.cmd = QUEUE_CMD_WRITE_EMMC;
+			queue_add_blocking(&xbox_queue, &entry);
+			uint32_t ret = 0;	// TODO: add errors processing
 			tud_cdc_write(&ret, 4);
 		}
 
@@ -330,6 +368,84 @@ void tud_cdc_tx_complete_cb(uint8_t itf)
 	(void)itf;
 }
 
+void core1_stop_smc()
+{
+	queue_entry_t entry;
+	entry.cmd = QUEUE_CMD_STOP_SMC;
+	queue_add_blocking(&xbox_queue, &entry);
+}
+
+void core1_start_smc()
+{
+	queue_entry_t entry;
+	entry.cmd = QUEUE_CMD_START_SMC;
+	queue_add_blocking(&xbox_queue, &entry);
+}
+
+uint32_t core1_get_config()
+{
+	queue_entry_t entry;
+	entry.cmd = QUEUE_CMD_GET_CONFIG;
+	queue_add_blocking(&xbox_queue, &entry);
+	queue_remove_blocking(&usb_queue, &entry);
+	return entry.status;
+}
+
+void main_core1(void)
+{
+	while(1)
+	{
+		queue_entry_t entry;
+		queue_peek_blocking(&xbox_queue, &entry);
+		if (entry.cmd == QUEUE_CMD_READ_NAND)
+		{
+			entry.status = xbox_nand_read_block(entry.offset, entry.data, entry.data + 0x200);
+			queue_add_blocking(&usb_queue, &entry);
+		} else if (entry.cmd == QUEUE_CMD_READ_EMMC)
+		{
+			entry.status = xbox_emmc_read_block(entry.offset, entry.data);
+			queue_add_blocking(&usb_queue, &entry);
+		} else if (entry.cmd == QUEUE_CMD_WRITE_NAND)
+		{
+			entry.status = xbox_nand_write_block(entry.offset, entry.data, entry.data + 0x200);
+			//queue_add_blocking(&usb_queue, &entry); 	// TODO: add errors processing
+		} else if (entry.cmd == QUEUE_CMD_WRITE_EMMC)
+		{
+			entry.status = xbox_emmc_write_block(entry.offset, entry.data);
+			//queue_add_blocking(&usb_queue, &entry); 	// TODO: add errors processing
+		} else if (entry.cmd == QUEUE_CMD_INIT_EMMC)
+		{
+			entry.status = xbox_emmc_init(entry.offset, entry.data);
+			queue_add_blocking(&usb_queue, &entry);
+		} else if (entry.cmd == QUEUE_CMD_READ_CID)
+		{
+			entry.status = xbox_emmc_read_cid(entry.data);
+			queue_add_blocking(&usb_queue, &entry);
+		} else if (entry.cmd == QUEUE_CMD_READ_CSD)
+		{
+			entry.status = xbox_emmc_read_csd(entry.data);
+			queue_add_blocking(&usb_queue, &entry);
+		} else if (entry.cmd == QUEUE_CMD_READ_EXT_CSD)
+		{
+			entry.status = xbox_emmc_read_ext_csd(entry.data);
+			queue_add_blocking(&usb_queue, &entry);
+		} else if (entry.cmd == QUEUE_CMD_GET_CONFIG)
+		{
+			entry.status = xbox_get_flash_config();
+			queue_add_blocking(&usb_queue, &entry);
+		} else if (entry.cmd == QUEUE_CMD_START_SMC)
+		{
+			xbox_start_smc();
+			//queue_add_blocking(&usb_queue, &entry);
+		} else if (entry.cmd == QUEUE_CMD_STOP_SMC)
+		{
+			xbox_stop_smc();
+			//queue_add_blocking(&usb_queue, &entry);
+		}
+		queue_remove_blocking(&xbox_queue, &entry);
+	}
+}
+
 int main(void)
 {
 	vreg_set_voltage(VREG_VOLTAGE_1_30);
@@ -339,8 +455,12 @@ int main(void)
 	clock_configure(clk_peri, 0, CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLK_SYS, freq, freq);
 
 	xbox_init();
-
 	tusb_init();
+
+	queue_init(&xbox_queue, sizeof(queue_entry_t), 8);
+    queue_init(&usb_queue, sizeof(queue_entry_t), 8);
+
+	multicore_launch_core1(main_core1);
 
 	while (1)
 	{

@@ -20,6 +20,9 @@
 #include "spiex.h"
 #include "pio_spi.h"
 
+bool is_selected = false;
+bool is_block_set = false;
+
 void xbox_init()
 {
 	gpio_init(SMC_DBG_EN);
@@ -68,6 +71,9 @@ void xbox_stop_smc()
 	sleep_ms(50);
 
 	spiex_init();
+
+	is_selected = false;
+	is_block_set = false;
 }
 
 uint32_t xbox_get_flash_config()
@@ -245,7 +251,9 @@ static void xbox_emmc_clear_ints(uint32_t value)
 
 static void xbox_emmc_clear_all_ints()
 {
-	xbox_emmc_clear_ints(xbox_emmc_get_ints());
+	uint32_t ints = xbox_emmc_get_ints();
+	if (ints)
+		xbox_emmc_clear_ints(ints);
 }
 
 static int xbox_emmc_wait_ints(uint32_t value, int timeout_ms)
@@ -283,12 +291,16 @@ int xbox_emmc_init()
 	{
 		return SD_ERR_TIMEOUT;
 	}
+	is_selected = false;
+	is_block_set = false;
 	return SD_OK;
 }
 
 static int xbox_emmc_deselect_card()
 {
 	xbox_emmc_execute(0, 0, 0x7000000);
+	is_selected = false;
+	is_block_set = false;
 	return xbox_emmc_wait_ints(1, 100);
 }
 
@@ -310,22 +322,31 @@ static int xbox_emmc_read_cid_csd(uint8_t * buf, int is_cid)
 
 int xbox_emmc_read_cid(uint8_t * cid)
 {
+	xbox_emmc_deselect_card();
 	return xbox_emmc_read_cid_csd(cid, 1);
 }
 
 int xbox_emmc_read_csd(uint8_t * csd)
 {
+	xbox_emmc_deselect_card();
 	return xbox_emmc_read_cid_csd(csd, 0);
 }
 
 static int xbox_emmc_select_card()
 {
+	if (is_selected)
+		return SD_OK;
 	xbox_emmc_execute(0, 0xffff0000, 0x71a0000);
+	is_selected = true;
+	is_block_set = false;
 	return xbox_emmc_wait_ints(1, 100);
 }
 
 static int xbox_emmc_set_blocklen(int blocklen)
 {
+	if (is_block_set)
+		return SD_OK;
+	is_block_set = true;
 	xbox_emmc_execute(0x200, blocklen, 0x101a0000);
 	return xbox_emmc_wait_ints(1, 100);
 }
@@ -354,7 +375,7 @@ static int xbox_emmc_read_block_ext_csd(uint8_t * buf, int block, int is_block)
 			memcpy(buf + i, &data, 4);
 		}
 	}
-	xbox_emmc_deselect_card();
+	//xbox_emmc_deselect_card();
 	return ret;
 }
 
@@ -377,8 +398,8 @@ int xbox_emmc_write_block(int lba, uint8_t *buf)
 	if (ret)
 		return ret;
 	xbox_emmc_execute(0x10200, lba << 9, 0x183a0000);
-	ret = xbox_emmc_wait_ints(1, 100);
-	if (!ret)
+	//ret = xbox_emmc_wait_ints(1, 100);
+	//if (!ret)
 	{
 		for (int i = 0; i < 0x200; i += 4)
 		{
@@ -388,6 +409,6 @@ int xbox_emmc_write_block(int lba, uint8_t *buf)
 		}
 		ret = xbox_emmc_wait_ints(0x12, 1500);
 	}
-	xbox_emmc_deselect_card();
+	//xbox_emmc_deselect_card();
 	return ret;
 }

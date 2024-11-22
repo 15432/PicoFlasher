@@ -84,6 +84,8 @@ void xbox_stop_smc()
 
 	spiex_init();
 
+	sleep_ms(200);
+
 	is_selected = false;
 	is_block_set = false;
 	is_smc_running = false;
@@ -91,6 +93,7 @@ void xbox_stop_smc()
 
 uint32_t xbox_get_flash_config()
 {
+	spiex_read_reg(0); // for some reason first ever read may fail
 	uint32_t flash_config = spiex_read_reg(0);
 
 	if ((flash_config & 0xF0000000) == 0xC0000000)
